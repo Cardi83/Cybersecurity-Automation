@@ -1,5 +1,7 @@
 # 🛡️ Cybersecurity Automation Toolkit
 
+![Languages](https://img.shields.io/github/languages/count/cardi83/Cybersecurity-Automation) ![Top Language](https://img.shields.io/github/languages/top/cardi83/Cybersecurity-Automation) ![Last Commit](https://img.shields.io/github/last-commit/cardi83/Cybersecurity-Automation)
+
 A sampling of automation scripts and tools designed by Chris Cardi to streamline cybersecurity operations, improve visibility, and enhance security posture through repeatable, scalable processes.
 
 ## 📖 Overview
