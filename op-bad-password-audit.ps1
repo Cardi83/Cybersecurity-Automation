@@ -1,65 +1,162 @@
-<#
-.SYNOPSIS
-    This script authenticates into the 1Password CLI and audits login credentials stored in a specified vault for weak or temporary password patterns.
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- PREP -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+# Check if op session is active
+try {
+    $test = op vault list --format json | ConvertFrom-Json
+}
+catch {
+    Write-Warning "1Password session appears to have timed out or failed."
+    Write-Host "Signing in..." -ForegroundColor Yellow
+    op signin
+}
 
-.DESCRIPTION
-    - Signs in to 1Password using CLI.
-    - Lists all login items in the specified vault.
-    - For each login item, retrieves the associated username and password.
-    - Searches for passwords that match specific weak patterns ("CHANGEME" or "CHANGEME2", case-insensitive).
-    - If a weak password is found, displays relevant details in the console and stores them in an array.
-    - Exports the findings to an Excel spreadsheet on the user's desktop using the ImportExcel module.
-
-.NOTES
-    - Requires 1Password CLI (`op`) to be installed and signed in.
-    - Requires the PowerShell `ImportExcel` module to export results.
-    - Customize `$vaultName`, `$output`, and regex patterns for other use cases.
-    
-    Author: Chris Cardi
-    Date: 5/3/2025
-#>
-
-# Signin
-Invoke-Expression $(op signin)
-
-# Personal Parameters
-$vaultName = "CHANGEME"
-$output = "C:\CHANGEME\BadPasswords.xlsx"
+# Set default file output - Platform OS-independent
+$output = [System.IO.Path]::Combine([Environment]::GetFolderPath("Desktop"), "BadPasswords.xlsx")
+$vaultName = "XXXXX"
 
 # Delete file if it already exists
-if ($output) {
-    Remove-Item $output
+if (Test-Path $output) {
+    Remove-Item $output -ErrorAction SilentlyContinue
+}
+
+# Prompt user for action
+Write-Host "`r`nWhat would you like to do?" -ForegroundColor Cyan
+Write-Host "
+    1. Open URLs
+    2. Export to Excel
+    3. Both 1 and 2
+    4. Output to Terminal
+    5. Exit" -ForegroundColor White
+
+$choice = Read-Host "`nEnter your choice"
+
+switch ($choice) {
+    '1' { $doOpenUrls = $true; $doExportExcel = $false }
+    '2' { $doOpenUrls = $false; $doExportExcel = $true }
+    '3' { $doOpenUrls = $true; $doExportExcel = $true }
+    '4' { $doOpenUrls = $false; $doExportExcel = $false }
+    '5' { Write-Host "Operation cancelled." -ForegroundColor Yellow; return }
+    default { Write-Host "Invalid choice. Exiting..." -ForegroundColor Red; return }
 }
 
 # Get login items
 $items = op item list --vault $vaultName --categories Login --format json | ConvertFrom-Json #this makes it an object to retrieve info from
+$total = $items.Count
+$counter = 0
 
-# Array
+# Trackers
 $results = @()
+$urlbatch = @()
+$batchsize = 10
+$validUrlCount = 0
 
+# Timer Start
+#$scanStart = Get-Date
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- SCAN -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 Write-Host "`nSearching...`n" -ForegroundColor Cyan
 
 foreach ($item in $items) {
-    $id = $item.id # Item ID number for that entry
-    $title = $item.title # Name of Titled entry
+    $counter++
+    $percentComplete = [math]::Round(($counter / $total) * 100)
+    # ------ Percentage Complete
+    Write-Progress -Id 1 -Activity "Scanning items..." -Status "$percentComplete% complete" -PercentComplete $percentComplete
+    # ------ Items / Items
+    #Write-Progress -Activity "Scanning items..." -Status "$counter of $total" -PercentComplete $percentComplete
 
-    # Retrieve username and password
-    $fields = op item get $id --vault $vaultName --fields label=username,label=password --format json | ConvertFrom-Json 
-    $username = ($fields | Where-Object { $_.label -eq "username" }).value
-    $password = ($fields | Where-Object { $_.label -eq "password" }).value
+    $id = $item.id
 
-    # Check for matching pattern
-    if ($password -match '(?i)CHANGEME' -or $password -match '(?i)CHANGEME2') { 
-        Write-Color "Match found in:", " $($title)" -Color White, Green
+    # Get username + password
+    $fields = op item get $id --vault $vaultName --fields label=username,label=password --format json | ConvertFrom-Json
+    $username = ($fields.Where({ $_.label -eq "username" }, 'First')).value
+    $password = ($fields.Where({ $_.label -eq "password" }, 'First')).value
+
+    # Perform checks
+    if ($password -match '(?i)CHANGEME0' -or $password -match '(?i)CHANGEME1') {
+        # Get full item only if password matches
+        $fullItem = op item get $id --vault $vaultName --format json | ConvertFrom-Json
+        if (-not $fullItem -or -not $fullItem.fields) {
+            Write-Warning "Failed to retrieve full item for ID $id. Skipping..."
+            continue
+        }
+
+    $title = $fullItem.title
+
+    Write-Color "Match found:", " $($title)" -Color White, Green
         Write-Host "Username: $username"
         Write-Host "--------------------------"
-        # Collect results wanted in array using hash table key pairs
-        $results += [PSCustomObject]@{
-            Title = $title
-            Username = $username
+
+        if ($doExportExcel) {
+            $results += [PSCustomObject]@{
+                Title = $title
+                Username = $username
+                Password = $password
+            }
+        }
+
+        if ($doOpenUrls) {
+            $url = $fullItem.urls | Select-Object -ExpandProperty href -First 1
+
+            if ($url -and $url -match '^https?://') {
+                $urlBatch += $url
+                $validUrlCount++
+                
+                # Update second progress bar - URLs Found
+                Write-Progress -Id 2 -Activity "URLs Found" `
+                    -Status "$($urlBatch.Count) of $batchSize URLs" `
+                    -PercentComplete ([math]::Round(($urlBatch.Count / $batchSize) * 100))
+
+                if ($validUrlCount -eq $batchSize) {
+                    foreach ($u in $urlBatch) {
+                        Start-Process $u
+                    }
+                    
+                    # Pause after 10 URLs caught and opened
+                    Write-Host "`nOpened $batchSize sites. Press Enter to continue scanning..." -ForegroundColor Yellow
+                    Read-Host
+
+                    # Re-check if op is still authenticated
+                    try {
+                        $test = op vault list --format json | ConvertFrom-Json
+                    }
+                    catch {
+                        Write-Warning "`n1Password session timed out. You must sign in again to continue."
+                        Write-Host "Signing in again..." -ForegroundColor Yellow
+                        op signin
+
+                        # Clear current batch to prevent re-opening old URLs
+                        $urlBatch.Clear()
+                        $validUrlCount = 0
+                        Write-Progress -Id 2 -Activity "Collecting URLs for next batch" -Completed
+                        Write-Host "`nSession restored. Resuming scan..." -ForegroundColor Green
+                        continue
+                    }
+
+                    # Clear only if still authenticated
+                    $urlBatch.Clear()
+                    $validUrlCount = 0
+                    Write-Progress -Id 2 -Activity "URLs Found" -Completed
+                }
+            }
         }
     }
 }
 
-$results | Export-Excel -Path $output -AutoSize -WorksheetName "Matches" -Show
-Write-Color "`nExcel file saved to", " $($output)`n" -color White, Cyan
+# Timer End
+#$scanEnd = Get-Date
+#$duration = $scanEnd - $scanStart
+
+# Export to Excel if chosen
+if ($doExportExcel) {
+    try {
+        $results | Export-Excel -Path $output -BoldTopRow -FreezeTopRow -AutoSize -AutoFilter -Show
+        Write-Color "`nExcel file saved to", " $($output)" -Color Cyan, White
+    }
+    catch {
+        Write-Color "`nFailed to save Excel file." -Color Red
+        Write-Color "Error: $($_.Exception.Message)" -Color Yellow
+    }
+}
+
+#Write-Color "Scan start time: ", "$($scanStart.ToString('yyyy-MM-dd HH:mm:ss'))" -Color Cyan, White
+#Write-Color "Scan end time: ", "$($scanEnd.ToString('yyyy-MM-dd HH:mm:ss'))" -Color Cyan, White
+#Write-Color "`n`nTotal scan time: ", "$($duration.ToString("hh\:mm\:ss"))`n" -Color Cyan, White
