@@ -1,3 +1,37 @@
+<#
+.SYNOPSIS
+    Audits 1Password vault for weak or placeholder passwords.
+
+.DESCRIPTION
+    Prompts for action: open matching URLs, export results to Excel, both, or just output to the terminal.
+    Scans each login item in the specified vault, highlights entries that match your patterns
+    (e.g., 'CHANGEME0', 'CHANGEME1'), and shows two progress bars:
+        - One for overall scan progress
+        - One for the next batch of URLs waiting to open
+    If opening URLs, it launches them in groups of 10 and pauses for you to press Enter before continuing.
+    If your 1Password session times out mid-scan, the script will pause, prompt you to sign in again,
+    clear the current URL batch, and then resume safely.
+
+.EXAMPLE
+    PS C:\> .\op-bad-password-audit.ps1
+    Select “Both” when prompted to open URLs in the browser (10 at a time) and save an Excel report
+    to your Desktop. The script scans, displays progress, handles re-authentication, and performs actions.
+
+.INPUTS
+    None via pipeline; prompts for user input during execution.
+
+.OUTPUTS
+    - Opens browser tabs in batches (if selected)
+    - Generates an Excel file on the Desktop with matches (if selected)
+    - Displays matching entries in the console
+
+.NOTES
+    - Requires PowerShell Core (or 5.1+) and the 1Password CLI installed and signed in.
+    - ImportExcel module must be installed for Excel export.
+    - Change `$vaultName` or pattern matching as needed to suit your environment.
+    - Tested on Windows and macOS with PowerShell Core.
+#>
+
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- PREP -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 # Check if op session is active
 try {
